@@ -1,4 +1,6 @@
 import requests
+import pandas as pd
+from datetime import datetime, timedelta
 
 COINPAPRIKA_API_URL = "https://api.coinpaprika.com/v1"
 
@@ -141,3 +143,108 @@ def get_coin_details(coin_id: str):
         return response.json()
     except requests.exceptions.RequestException as e:
         return {"error": f"Could not fetch details for coin '{coin_id}': {e}"}
+    
+# ... (imports เดิมต้องมี pandas, requests) ...
+
+def get_binance_historical_data(symbol: str, days: int = 30):
+    """
+    ดึงข้อมูลย้อนหลังฟรีจาก Binance API
+    Binance ใช้คู่เหรียญ เช่น BTCUSDT
+    """
+    # แปลงให้เป็นตัวพิมพ์ใหญ่ + USDT (เช่น btc -> BTCUSDT)
+    pair = f"{symbol.upper()}USDT"
+    
+    url = "https://api.binance.com/api/v3/klines"
+    params = {
+        "symbol": pair,
+        "interval": "1d",   # กราฟรายวัน
+        "limit": days       # จำนวนแท่งเทียน
+    }
+    
+    try:
+        response = session.get(url, params=params)
+        
+        # กรณีหาเหรียญไม่เจอใน Binance (เช่นเหรียญแปลกๆ)
+        if response.status_code == 400:
+             return {"error": f"Symbol '{pair}' not found on Binance."}
+             
+        response.raise_for_status()
+        data = response.json()
+        
+        # Binance ส่งข้อมูลมาเป็น List ซ้อน List เราต้องแปลงเป็น DataFrame
+        # ข้อมูลคือ: [Open Time, Open, High, Low, Close, Volume, ...]
+        df = pd.DataFrame(data, columns=[
+            'open_time', 'open', 'high', 'low', 'close', 'volume', 
+            'close_time', 'q_asset_vol', 'num_trades', 'taker_buy_base', 'taker_buy_quote', 'ignore'
+        ])
+        
+        # แปลงราคาจาก String เป็น Float เพื่อคำนวณ
+        df['close'] = df['close'].astype(float)
+        
+        return df
+    except requests.exceptions.RequestException as e:
+        return {"error": f"Could not fetch history from Binance: {e}"}
+
+def calculate_sma(coin: str, window: int = 14):
+    # 1. หาข้อมูลเหรียญ (ได้ชื่อจริงจากตรงนี้)
+    price_info = get_crypto_price(coin)
+    if "error" in price_info:
+        return price_info
+    
+    symbol = price_info['symbol']
+    real_name = price_info['name']  # <--- เก็บชื่อจริงไว้ (เช่น Bitcoin)
+    
+    # 2. ดึงกราฟ
+    df = get_binance_historical_data(symbol, days=window + 5)
+    if isinstance(df, dict) and "error" in df:
+        return df
+    
+    # 3. คำนวณ
+    sma = df['close'].rolling(window=window).mean().iloc[-1]
+    current_price = df['close'].iloc[-1]
+    
+    return {
+        "coin_name": real_name,     # <--- ส่งชื่อจริงกลับไปด้วย
+        "coin_symbol": symbol,
+        "indicator": "SMA",
+        "period": window,
+        "value": sma,
+        "current_price": current_price,
+        "signal": "BUY" if current_price > sma else "SELL"
+    }
+
+def calculate_rsi(coin: str, window: int = 14):
+    # 1. หาข้อมูลเหรียญ
+    price_info = get_crypto_price(coin)
+    if "error" in price_info:
+        return price_info
+    
+    symbol = price_info['symbol']
+    real_name = price_info['name']  # <--- เก็บชื่อจริงไว้
+    
+    # 2. ดึงกราฟ
+    df = get_binance_historical_data(symbol, days=window * 4)
+    if isinstance(df, dict) and "error" in df:
+        return df
+
+    # 3. คำนวณ
+    delta = df['close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
+
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    current_rsi = rsi.iloc[-1]
+
+    signal = "NEUTRAL"
+    if current_rsi > 70: signal = "OVERBOUGHT (SELL)"
+    elif current_rsi < 30: signal = "OVERSOLD (BUY)"
+
+    return {
+        "coin_name": real_name,     # <--- ส่งชื่อจริงกลับไปด้วย
+        "coin_symbol": symbol,
+        "indicator": "RSI",
+        "period": window,
+        "value": current_rsi,
+        "signal": signal
+    }
