@@ -51,8 +51,8 @@ def _get_coin_map():
         # We catch all exceptions here to avoid unexpected crashes in the API.
         return {}
 
-def get_crypto_price(coin: str):
-    """Gets the price of a single cryptocurrency from Coinpaprika."""
+def _resolve_coin_id(coin: str):
+    """Resolves a coin symbol or name to a Coinpaprika coin ID."""
     coin_map = _get_coin_map()
     coin_lower = coin.lower()
 
@@ -88,6 +88,11 @@ def get_crypto_price(coin: str):
             except requests.exceptions.RequestException:
                 # If search fails, fall back to treating input as ID (will likely 404)
                 coin_id = coin_lower
+    return coin_id
+
+def get_crypto_price(coin: str):
+    """Gets the price of a single cryptocurrency from Coinpaprika."""
+    coin_id = _resolve_coin_id(coin)
     url = f"{COINPAPRIKA_API_URL}/tickers/{coin_id}"
     try:
         response = session.get(url)
@@ -118,6 +123,33 @@ def get_top_coins(limit: int = 10):
         return sorted(data, key=lambda x: x['rank'])[:limit]
     except requests.exceptions.RequestException as e:
         return {"error": f"Could not fetch top coins: {e}"}
+
+def get_tickers(limit: int = 100):
+    """Gets a list of tickers."""
+    url = f"{COINPAPRIKA_API_URL}/tickers?quotes=USD"
+    try:
+        response = session.get(url)
+        response.raise_for_status()
+        data = response.json()
+        return sorted(data, key=lambda x: x['rank'])[:limit]
+    except requests.exceptions.RequestException as e:
+        return {"error": f"Could not fetch tickers: {e}"}
+
+def get_ticker(coin: str):
+    """Gets the full ticker data for a specific coin."""
+    coin_id = _resolve_coin_id(coin)
+    url = f"{COINPAPRIKA_API_URL}/tickers/{coin_id}"
+    try:
+        response = session.get(url)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.HTTPError as http_err:
+        if http_err.response.status_code == 404:
+            return {"error": f"Coin with symbol or ID '{coin}' not found."}
+        return {"error": f"HTTP error occurred: {http_err}"}
+    except requests.exceptions.RequestException as req_err:
+        return {"error": f"Request failed: {req_err}"}
+
 
 def search_coins(query: str):
     """Searches for coins by name or symbol."""
