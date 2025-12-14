@@ -1,5 +1,5 @@
 import click
-from .utils import get_crypto_price, calculate_sma, calculate_rsi # Import เพิ่ม
+from .utils import get_crypto_price, calculate_sma, calculate_rsi, get_ticker # Import เพิ่ม
 
 @click.group()
 def cli():
@@ -16,6 +16,44 @@ def price(coin):
         click.secho(f"Error: {data['error']}", fg="red")
     else:
         click.echo(f"{data['name']}: ${data['price']:,.4f}")
+
+@cli.command()
+@click.argument("coin")
+@click.argument("timestamps", nargs=-1)
+def changes(coin, timestamps):
+    """Get percentage price changes for specific timestamps."""
+    data = get_ticker(coin)
+    if "error" in data:
+        click.secho(f"Error: {data['error']}", fg="red")
+        return
+
+    name = data.get("name")
+    symbol = data.get("symbol")
+    quotes = data.get("quotes", {}).get("USD", {})
+
+    click.secho(f"📊 Price changes for {name} ({symbol})", bold=True)
+
+    if not timestamps:
+        # If no timestamps provided, show all available in a logical order
+        preferred_order = ["15m", "30m", "1h", "6h", "12h", "24h", "7d", "30d", "1y"]
+        timestamps = []
+        for ts in preferred_order:
+            if f"percent_change_{ts}" in quotes:
+                timestamps.append(ts)
+        # Add any others found in the response
+        for key in quotes:
+            if key.startswith("percent_change_") and key.replace("percent_change_", "") not in timestamps:
+                timestamps.append(key.replace("percent_change_", ""))
+
+    for ts in timestamps:
+        key = f"percent_change_{ts.lower()}"
+        val = quotes.get(key)
+        if val is not None:
+            color = "green" if val > 0 else ("red" if val < 0 else "white")
+            sign = "+" if val > 0 else ""
+            click.secho(f"{ts+':':<5} {sign}{val}%", fg=color)
+        else:
+            click.secho(f"{ts+':':<5} N/A", fg="yellow")
 
 # --- คำสั่งใหม่: Analyze Group ---
 @cli.group()
